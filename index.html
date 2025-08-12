@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Particle Bounce — Eğlenceli Partikül Oyunu</title>
+<style>
+  html,body{height:100%;margin:0;background:#010211;font-family:Inter,Arial,color:#fff;display:flex;align-items:center;justify-content:center}
+  canvas{border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.7);background:linear-gradient(180deg,#021226,#04031a)}
+  .ui{position:fixed;left:18px;top:18px;background:rgba(255,255,255,0.03);padding:8px 12px;border-radius:10px}
+  .center{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);background:rgba(255,255,255,0.03);padding:14px;border-radius:12px;text-align:center}
+  button{padding:10px 14px;border-radius:10px;border:none;background:#ffd166;color:#031826;font-weight:700;cursor:pointer}
+  .hint{font-size:13px;color:#cde}
+</style>
+</head>
+<body>
+<canvas id="game" width="1000" height="640"></canvas>
+<div class="ui" id="hud">Skor: 0 &nbsp;|&nbsp; Seviye: 1</div>
+<div class="center" id="menu">
+  <h2 style="margin:0">Particle Bounce</h2>
+  <div class="hint">Oyuncu bir çekim merkezidir. Fare ile taşı, boşluk (space) ile zıpla (enerji patlaması). Yeşil parçacıkları topla, kırmızıdan kaç. Hepsi parçacıklarla çizilir.</div>
+  <div style="margin-top:12px"><button id="start">Başlat</button> <button id="practice">Pratik</button></div>
+  <div style="font-size:13px;margin-top:8px;color:#bcd">Kontroller: Fare/Hareket, Space: Zıpla/Burst, Tık: Kısa itiş</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  let W = canvas.width, H = canvas.height;
+
+  const hud = document.getElementById('hud');
+  const menu = document.getElementById('menu');
+  const startBtn = document.getElementById('start');
+  const practiceBtn = document.getElementById('practice');
+
+  // state
+  let running = false; let score = 0; let level = 1; let frame = 0;
+
+  // player core (particle)
+  const player = { x: W/2, y: H/2, r: 14, vx:0, vy:0, energy: 100, alive:true };
+
+  // arrays
+  const goodies = []; // green = +points
+  const hazards = []; // red = death
+  const bumps = []; // moving clusters that bounce player
+  const effects = [];
+
+  // input
+  let pointer = { x: W/2, y: H/2, down:false };
+  window.addEventListener('mousemove', e => { const r = canvas.getBoundingClientRect(); pointer.x = (e.clientX - r.left) * (canvas.width / r.width); pointer.y = (e.clientY - r.top) * (canvas.height / r.height); });
+  canvas.addEventListener('pointerdown', e => { pointer.down = true; pulse(); });
+  canvas.addEventListener('pointerup', e => { pointer.down = false; });
+  window.addEventListener('keydown', e => { if(e.code==='Space') jumpBurst(); });
+
+  function resize(){ const sW = Math.min(window.innerWidth-40, 1200); const sH = Math.min(window.innerHeight-80, 800); canvas.width = Math.max(700, sW); canvas.height = Math.max(420, sH); W=canvas.width; H=canvas.height; }
+  window.addEventListener('resize', resize);
+  resize();
+
+  function rand(a,b){ return a + Math.random()*(b-a); }
+
+  // spawn helpers
+  function spawnGoodie(){ const x = W + 20; const y = rand(40,H-40); goodies.push({ x,y,vx:-1.2 - Math.random()*1.6, vy: (Math.random()-0.5)*0.6, r:6 + Math.random()*4, wob:Math.random()*0.8 }); }
+  function spawnHazard(){ const x = W + 20; const y = rand(40,H-40); hazards.push({ x,y,vx:-1.6 - Math.random()*2.2, vy:(Math.random()-0.5)*0.8, r:8 + Math.random()*6 }); }
+  function spawnBump(){ const x = W + 40; const y = rand(120,H-120); bumps.push({ x,y,vx:-1 - Math.random()*1.2, wob: Math.random()*0.5, r: 20 + Math.random()*22 }); }
+  function spawnEffect(x,y,color,n){ for(let i=0;i<n;i++){ effects.push({ x:x+rand(-6,6), y:y+rand(-6,6), vx:(Math.random()-0.5)*3, vy:(Math.random()-0.5)*3, life:30+Math.random()*30, color }); } }
+
+  function pulse(){ // short burst that pushes nearby particles away
+    spawnEffect(player.x, player.y, 'rgba(255,255,255,0.9)', 18);
+    for(const g of goodies) { const d = Math.hypot(g.x-player.x, g.y-player.y); if(d<140){ g.vx += (g.x-player.x)/d * 2.4; g.vy += (g.y-player.y)/d * 2.4; } }
+    for(const h of hazards){ const d = Math.hypot(h.x-player.x, h.y-player.y); if(d<140){ h.vx += (h.x-player.x)/d * 2.8; h.vy += (h.y-player.y)/d * 2.8; } }
+  }
+
+  function jumpBurst(){ if(!running || !player.alive) return; // big upward impulse
+    player.vy -= 6; spawnEffect(player.x, player.y, 'rgba(160,220,255,0.95)', 22); player.energy = Math.max(0, player.energy - 12);
+  }
+
+  function seedInitial(){ goodies.length=0; hazards.length=0; bumps.length=0; effects.length=0; for(let i=0;i<24;i++) spawnGoodie(); for(let i=0;i<6;i++) spawnHazard(); for(let i=0;i<4;i++) spawnBump(); }
+
+  function update(dt){ if(!running || !player.alive) return; frame += dt/16;
+    // move player toward pointer slightly (magnetic steering)
+    player.vx += (pointer.x - player.x) * 0.004 * (dt/16);
+    player.vy += (pointer.y - player.y) * 0.004 * (dt/16);
+    // integrate
+    player.vx *= 0.98; player.vy *= 0.98;
+    player.x += player.vx * (dt/16); player.y += player.vy * (dt/16);
+    // keep in bounds
+    player.x = Math.max(20, Math.min(W-20, player.x)); player.y = Math.max(20, Math.min(H-20, player.y));
+
+    // spawn logic (increasing with level)
+    if(frame % Math.max(6, 40 - level*4) < 1) { if(Math.random()<0.6) spawnGoodie(); if(Math.random()<0.18) spawnHazard(); if(Math.random()<0.08) spawnBump(); }
+
+    // move goodies
+    for(let i=goodies.length-1;i>=0;i--){ const g = goodies[i]; g.x += g.vx * (dt/16); g.y += g.vy * (dt/16); g.vy += Math.sin((frame+g.wob)*0.04)*0.02; if(g.x < -60) goodies.splice(i,1); }
+    // hazards
+    for(let i=hazards.length-1;i>=0;i--){ const h = hazards[i]; h.x += h.vx * (dt/16); h.y += h.vy * (dt/16); if(h.x < -80) hazards.splice(i,1); }
+    // bumps
+    for(let i=bumps.length-1;i>=0;i--){ const b = bumps[i]; b.x += b.vx * (dt/16); if(b.x < -120) bumps.splice(i,1); }
+
+    // collisions: goodies
+    for(let i=goodies.length-1;i>=0;i--){ const g = goodies[i]; const d = Math.hypot(g.x-player.x, g.y-player.y); if(d < g.r + player.r + 2){ score += 10; spawnEffect(g.x,g.y,'rgba(120,255,160,0.95)',10); goodies.splice(i,1); } }
+    // hazards => death
+    for(const h of hazards){ const d = Math.hypot(h.x-player.x, h.y-player.y); if(d < h.r + player.r + 2){ // death
+        player.alive = false; running=false; spawnEffect(player.x,player.y,'rgba(255,90,90,0.95)',36); menu.style.display='flex'; menu.querySelector('.hint').textContent = 'Öldün — Skor: ' + score; return; } }
+    // bumps => bounce
+    for(const b of bumps){ const d = Math.hypot(b.x-player.x, b.y-player.y); if(d < b.r + player.r + 2){ // reflect away with strength
+        const nx = (player.x - b.x)/d, ny = (player.y - b.y)/d; player.vx = nx * 8; player.vy = ny * 8; spawnEffect(player.x,player.y,'rgba(200,200,255,0.9)',12); } }
+
+    // update effects
+    for(let i=effects.length-1;i>=0;i--){ const e = effects[i]; e.x += e.vx; e.y += e.vy; e.vy += 0.06; e.life--; if(e.life<=0) effects.splice(i,1); }
+
+    // level progression
+    if(score > level * 300){ level++; }
+    hud.textContent = `Skor: ${score} • Seviye: ${level}`;
+  }
+
+  function draw(){ ctx.clearRect(0,0,W,H);
+    // background subtle
+    const g = ctx.createLinearGradient(0,0,0,H); g.addColorStop(0,'#021226'); g.addColorStop(1,'#04031a'); ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
+
+    // effects
+    for(const e of effects){ ctx.globalAlpha = Math.max(0, e.life/50); ctx.fillStyle = e.color; ctx.beginPath(); ctx.arc(e.x, e.y, Math.max(1, e.life/6), 0, Math.PI*2); ctx.fill(); }
+    ctx.globalAlpha = 1;
+
+    // bumps (clusters) visualized as multi-particles
+    for(const b of bumps){ for(let i=0;i<8;i++){ const angle = i/8*Math.PI*2; const rx = b.x + Math.cos(angle)* (b.r*0.6); const ry = b.y + Math.sin(angle)* (b.r*0.6); ctx.fillStyle = '#9ad0ff'; ctx.beginPath(); ctx.arc(rx, ry, 4, 0, Math.PI*2); ctx.fill(); } }
+
+    // goodies (green)
+    for(const g of goodies){ ctx.fillStyle = '#7bffb8'; ctx.beginPath(); ctx.arc(g.x, g.y, g.r, 0, Math.PI*2); ctx.fill(); ctx.fillStyle='rgba(255,255,255,0.16)'; ctx.beginPath(); ctx.arc(g.x-g.r*0.3, g.y-g.r*0.3, g.r*0.45, 0, Math.PI*2); ctx.fill(); }
+
+    // hazards (red)
+    for(const h of hazards){ ctx.fillStyle = '#ff8b8b'; ctx.beginPath(); ctx.arc(h.x, h.y, h.r, 0, Math.PI*2); ctx.fill(); ctx.fillStyle='rgba(255,255,255,0.12)'; ctx.beginPath(); ctx.arc(h.x - h.r*0.3, h.y - h.r*0.3, h.r*0.45,0,Math.PI*2); ctx.fill(); }
+
+    // player core with glow
+    ctx.beginPath(); ctx.fillStyle = 'rgba(255,210,236,0.06)'; ctx.ellipse(player.x, player.y, 70, 50, 0,0,Math.PI*2); ctx.fill();
+    ctx.fillStyle = '#ffd1ec'; ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill();
+    // energy ring
+    ctx.strokeStyle = 'rgba(255,255,255,0.08)'; ctx.lineWidth = 3; ctx.beginPath(); ctx.arc(player.x, player.y, player.r + 8, 0, Math.PI*2); ctx.stroke();
+
+    // HUD overlay handled by DOM
+  }
+
+  // main loop
+  let last = 0; function loop(ts){ if(!last) last = ts; const dt = Math.min(40, ts-last); last = ts; update(dt); draw(); requestAnimationFrame(loop); }
+
+  // UI events
+  startBtn.addEventListener('click', ()=>{ menu.style.display='none'; running=true; score=0; level=1; player.alive=true; player.x = W/2; player.y = H/2; seedInitial(); });
+  practiceBtn.addEventListener('click', ()=>{ menu.style.display='none'; running=true; score=0; level=1; player.alive=true; player.x = W/2; player.y = H/2; seedInitial(); });
+
+  function seedInitial(){ goodies.length=0; hazards.length=0; bumps.length=0; effects.length=0; for(let i=0;i<20;i++) spawnGoodie(); for(let i=0;i<6;i++) spawnHazard(); for(let i=0;i<3;i++) spawnBump(); }
+
+  // start animation
+  requestAnimationFrame(loop);
+
+})();
+</script>
+</body>
+</html>
